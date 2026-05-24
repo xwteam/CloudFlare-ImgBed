@@ -289,8 +289,10 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
 
             if (uploadChannel === 'cfr2') {
                 uploadResult = await uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
-            } else if (uploadChannel === 's3') {
+            } else if (uploadChannel === 's3' || uploadChannel === 'tencentcos') {
                 uploadResult = await uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
+            } else if (uploadChannel === 'tencentcos') {
+                uploadResult = await uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, 'tencentcos');
             } else if (uploadChannel === 'telegram') {
                 uploadResult = await uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
             } else if (uploadChannel === 'discord') {
@@ -451,12 +453,12 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
 }
 
 // 上传单个分块到S3 (Multipart Upload)
-async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType) {
+async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, storageType = 's3') {
     const { env, uploadConfig, specifiedChannelName } = context;
     const db = getDatabase(env);
 
     try {
-        const s3Settings = uploadConfig.s3;
+        const s3Settings = storageType === 'tencentcos' ? uploadConfig.tencentcos : uploadConfig.s3;
         const s3Channels = s3Settings.channels;
         
         // 优先使用指定的渠道名称
@@ -468,10 +470,10 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
             s3Channel = selectConsistentChannel(s3Channels, uploadId, s3Settings.loadBalance.enabled);
         }
 
-        console.log(`Uploading S3 chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${s3Channel.name || 'default'}`);
+        console.log(`Uploading ${storageType === 'tencentcos' ? 'Tencent COS' : 'S3'} chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${s3Channel.name || 'default'}`);
 
         if (!s3Channel) {
-            return { success: false, error: 'No S3 channel provided' };
+            return { success: false, error: storageType === 'tencentcos' ? 'No Tencent COS channel provided' : 'No S3 channel provided' };
         }
 
         const { endpoint, pathStyle, accessKeyId, secretAccessKey, bucketName, region } = s3Channel;
@@ -559,12 +561,13 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
             size: chunkData.byteLength,
             uploadTime: Date.now(),
             s3Channel: s3Channel.name,
+            storageType,
             multipartUploadId: multipartInfo.uploadId,
             key: finalFileId
         };
 
     } catch (error) {
-        console.error(`S3 chunk upload error (chunk ${chunkIndex}):`, error.message, error.name, error.$metadata);
+        console.error(`${storageType === 'tencentcos' ? 'Tencent COS' : 'S3'} chunk upload error (chunk ${chunkIndex}):`, error.message, error.name, error.$metadata);
         return {
             success: false,
             error: error.message
@@ -879,7 +882,7 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
             const retryPromise = (async () => {
                 if (uploadChannel === 'cfr2') {
                     return await uploadSingleChunkToR2Multipart(context, chunkData, chunk.index, totalChunks, uploadId, originalFileName, originalFileType);
-                } else if (uploadChannel === 's3') {
+                } else if (uploadChannel === 's3' || uploadChannel === 'tencentcos') {
                     return await uploadSingleChunkToS3Multipart(context, chunkData, chunk.index, totalChunks, uploadId, originalFileName, originalFileType);
                 } else if (uploadChannel === 'telegram') {
                     return await uploadSingleChunkToTelegram(context, chunkData, chunk.index, totalChunks, uploadId, originalFileName, originalFileType);
@@ -982,7 +985,7 @@ export async function cleanupFailedMultipartUploads(context, uploadId, uploadCha
             const multipartUpload = R2DataBase.resumeMultipartUpload(multipartInfo.key, multipartInfo.uploadId);
             await multipartUpload.abort();
 
-        } else if (uploadChannel === 's3') {
+        } else if (uploadChannel === 's3' || uploadChannel === 'tencentcos') {
             // 清理S3 multipart upload
             const s3Settings = uploadConfig.s3;
             const s3Channels = s3Settings.channels;
