@@ -69,7 +69,7 @@ export async function handleChunkMerge(context) {
 
     } catch (error) {
         // 清理失败的multipart uploads
-        if (uploadChannel === 'cfr2' || uploadChannel === 's3' || uploadChannel === 'tencentcos') {
+        if (uploadChannel === 'cfr2' || uploadChannel === 's3') {
             waitUntil(cleanupFailedMultipartUploads(context, uploadId, uploadChannel));
         }
 
@@ -122,7 +122,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
 
     } catch (error) {
         // 清理失败的multipart uploads
-        if (uploadChannel === 'cfr2' || uploadChannel === 's3' || uploadChannel === 'tencentcos') {
+        if (uploadChannel === 'cfr2' || uploadChannel === 's3') {
             await cleanupFailedMultipartUploads(context, uploadId, uploadChannel);
         }
 
@@ -209,8 +209,6 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             result = await mergeR2ChunksInfo(context, uploadId, completedChunks, metadata);
         } else if (uploadChannel === 's3') {
             result = await mergeS3ChunksInfo(context, uploadId, completedChunks, metadata);
-        } else if (uploadChannel === 'tencentcos') {
-            result = await mergeS3ChunksInfo(context, uploadId, completedChunks, metadata, 'tencentcos');
         } else if (uploadChannel === 'telegram') {
             result = await mergeTelegramChunksInfo(context, uploadId, completedChunks, metadata);
         } else if (uploadChannel === 'discord') {
@@ -312,12 +310,12 @@ async function mergeR2ChunksInfo(context, uploadId, completedChunks, metadata) {
 }
 
 // 合并S3分块信息
-async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata, storageType = 's3') {
+async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
     const { env, waitUntil, uploadConfig, url, specifiedChannelName } = context;
     const db = getDatabase(env);
 
     try {
-        const s3Settings = storageType === 'tencentcos' ? uploadConfig.tencentcos : uploadConfig.s3;
+        const s3Settings = uploadConfig.s3;
         const s3Channels = s3Settings.channels;
         
         // 优先使用指定的渠道名称
@@ -329,7 +327,7 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata, s
             s3Channel = selectConsistentChannel(s3Channels, uploadId, s3Settings.loadBalance.enabled);
         }
 
-        console.log(`Merging ${storageType === 'tencentcos' ? 'Tencent COS' : 'S3'} chunks for uploadId: ${uploadId}, selected channel: ${s3Channel.name || 'default'}`);
+        console.log(`Merging S3 chunks for uploadId: ${uploadId}, selected channel: ${s3Channel.name || 'default'}`);
 
         const { endpoint, pathStyle, accessKeyId, secretAccessKey, bucketName, region } = s3Channel;
 
@@ -375,7 +373,7 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata, s
 
         // 使用multipart info中的finalFileId更新metadata
         const finalFileId = multipartInfo.key;
-        metadata.Channel = storageType === 'tencentcos' ? "TencentCOS" : "S3";
+        metadata.Channel = "S3";
         metadata.ChannelName = s3Channel.name;
         metadata.FileSize = (totalSize / 1024 / 1024).toFixed(2);
         metadata.FileSizeBytes = totalSize;
@@ -393,17 +391,6 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata, s
         metadata.S3Region = region || "auto";
         metadata.S3BucketName = bucketName;
         metadata.S3FileKey = finalFileId;
-        if (storageType === 'tencentcos') {
-            metadata.TencentCOSEndpoint = endpoint;
-            metadata.TencentCOSPathStyle = pathStyle;
-            metadata.TencentCOSAccessKeyId = accessKeyId;
-            metadata.TencentCOSSecretAccessKey = secretAccessKey;
-            metadata.TencentCOSRegion = region || "auto";
-            metadata.TencentCOSBucketName = bucketName;
-            metadata.TencentCOSFileKey = finalFileId;
-            metadata.TencentCOSLocation = metadata.S3Location;
-            metadata.TencentCOSCdnFileUrl = s3Channel.cdnDomain ? `${s3Channel.cdnDomain.replace(/\/$/, '')}/${finalFileId}` : '';
-        }
 
         // 清理multipart info
         await db.delete(multipartKey);
@@ -429,7 +416,7 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata, s
         };
 
     } catch (error) {
-        throw new Error(`${storageType === 'tencentcos' ? 'Tencent COS' : 'S3'} merge failed: ${error.message}`);
+        throw new Error(`S3 merge failed: ${error.message}`);
     }
 }
 
