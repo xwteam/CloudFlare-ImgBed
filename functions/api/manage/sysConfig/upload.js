@@ -42,6 +42,31 @@ export async function onRequest(context) {
 
 }
 
+
+function buildTencentCOSEndpoint(region) {
+    return region ? `https://cos.${region}.myqcloud.com` : ''
+}
+
+function buildTencentCOSBucketName(bucket, appId) {
+    if (!bucket) return ''
+    const normalizedBucket = String(bucket).trim()
+    const normalizedAppId = appId ? String(appId).trim() : ''
+    if (!normalizedAppId) return normalizedBucket
+    return normalizedBucket.endsWith(`-${normalizedAppId}`)
+        ? normalizedBucket
+        : `${normalizedBucket}-${normalizedAppId}`
+}
+
+function normalizeTencentCOSBucketShortName(bucket, appId) {
+    if (!bucket) return ''
+    const normalizedBucket = String(bucket).trim()
+    const normalizedAppId = appId ? String(appId).trim() : ''
+    if (!normalizedAppId) return normalizedBucket
+    return normalizedBucket.endsWith(`-${normalizedAppId}`)
+        ? normalizedBucket.slice(0, -(`-${normalizedAppId}`.length))
+        : normalizedBucket
+}
+
 export async function getUploadConfig(db, env) {
     const settings = {}
     // 读取数据库中的设置
@@ -175,6 +200,57 @@ export async function getUploadConfig(db, env) {
         channels: [],
     }
     s3.loadBalance = s3LoadBalance
+
+
+    // =====================读取 Tencent COS 渠道配置=====================
+    const tencentcos = {}
+    const tencentcosChannels = []
+    tencentcos.channels = tencentcosChannels
+    if (env.TENCENT_COS_SECRET_ID) {
+        tencentcosChannels.push({
+            id: 1,
+            name: 'TencentCOS_env',
+            type: 'tencentcos',
+            savePath: 'environment variable',
+            appId: env.TENCENT_COS_APP_ID || '',
+            secretId: env.TENCENT_COS_SECRET_ID,
+            secretKey: env.TENCENT_COS_SECRET_KEY,
+            region: env.TENCENT_COS_REGION,
+            bucket: env.TENCENT_COS_BUCKET,
+            bucketName: buildTencentCOSBucketName(env.TENCENT_COS_BUCKET, env.TENCENT_COS_APP_ID),
+            endpoint: env.TENCENT_COS_ENDPOINT || buildTencentCOSEndpoint(env.TENCENT_COS_REGION),
+            publicUrl: env.TENCENT_COS_PUBLIC_URL || env.TENCENT_COS_CDN_DOMAIN || '',
+            cdnDomain: env.TENCENT_COS_CDN_DOMAIN || env.TENCENT_COS_PUBLIC_URL || '',
+            pathStyle: false,
+            enabled: true,
+            fixed: true,
+        })
+    }
+    for (const cos of settingsKV.tencentcos?.channels || []) {
+        if (cos.savePath === 'environment variable') {
+            if (tencentcosChannels[0]) {
+                tencentcosChannels[0].enabled = cos.enabled
+                tencentcosChannels[0].quota = cos.quota
+                tencentcosChannels[0].publicUrl = cos.publicUrl || cos.cdnDomain || tencentcosChannels[0].publicUrl
+                tencentcosChannels[0].cdnDomain = cos.cdnDomain || cos.publicUrl || tencentcosChannels[0].cdnDomain
+            }
+            continue
+        }
+        cos.id = tencentcosChannels.length + 1
+        cos.type = 'tencentcos'
+        cos.bucketName = buildTencentCOSBucketName(cos.bucketName || cos.bucket, cos.appId)
+        cos.bucket = normalizeTencentCOSBucketShortName(cos.bucket || cos.bucketName, cos.appId)
+        cos.endpoint = cos.endpoint || buildTencentCOSEndpoint(cos.region)
+        cos.pathStyle = false
+        tencentcosChannels.push(cos)
+    }
+
+    const tencentcosLoadBalance = settingsKV.tencentcos?.loadBalance || {
+        enabled: false,
+        channels: [],
+    }
+    tencentcos.loadBalance = tencentcosLoadBalance
+
 
 
     // =====================读取 Discord 渠道配置=====================
@@ -319,6 +395,7 @@ export async function getUploadConfig(db, env) {
     settings.telegram = telegram
     settings.cfr2 = cfr2
     settings.s3 = s3
+    settings.tencentcos = tencentcos
     settings.discord = discord
     settings.huggingface = huggingface
     settings.webdav = webdav

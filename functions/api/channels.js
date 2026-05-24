@@ -48,6 +48,10 @@ export async function onRequest(context) {
                 name: ch.name,
                 type: 'S3'
             })),
+            tencentcos: (uploadConfig.tencentcos?.channels || []).map(ch => ({
+                name: ch.name,
+                type: 'TencentCOS'
+            })),
             discord: uploadConfig.discord.channels.map(ch => ({
                 name: ch.name,
                 type: 'Discord'

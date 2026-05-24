@@ -110,6 +110,9 @@ async function processFileUpload(context, formdata = null) {
         case 's3':
             uploadChannel = 'S3';
             break;
+        case 'tencentcos':
+            uploadChannel = 'TencentCOS';
+            break;
         case 'discord':
             uploadChannel = 'Discord';
             break;
@@ -217,6 +220,14 @@ async function processFileUpload(context, formdata = null) {
     } else if (uploadChannel === 'S3') {
         // ---------------------S3 渠道------------------
         const res = await uploadFileToS3(context, fullId, metadata, returnLink);
+        if (res.status === 200 || !autoRetry) {
+            return res;
+        } else {
+            err = await res.text();
+        }
+    } else if (uploadChannel === 'TencentCOS') {
+        // ------------------Tencent COS 渠道------------------
+        const res = await uploadFileToTencentCOS(context, fullId, metadata, returnLink);
         if (res.status === 200 || !autoRetry) {
             return res;
         } else {
@@ -446,6 +457,134 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
     }
 }
 
+
+
+function buildTencentCOSEndpoint(region) {
+    return region ? `https://cos.${region}.myqcloud.com` : '';
+}
+
+function buildTencentCOSBucketName(bucket, appId) {
+    if (!bucket) return '';
+    const normalizedBucket = String(bucket).trim();
+    const normalizedAppId = appId ? String(appId).trim() : '';
+    if (!normalizedAppId) return normalizedBucket;
+    return normalizedBucket.endsWith(`-${normalizedAppId}`)
+        ? normalizedBucket
+        : `${normalizedBucket}-${normalizedAppId}`;
+}
+
+function normalizeTencentCOSPublicBase(publicUrl) {
+    return publicUrl ? String(publicUrl).replace(/\/$/, '') : '';
+}
+
+async function uploadFileToTencentCOS(context, fullId, metadata, returnLink) {
+    const { env, waitUntil, uploadConfig, securityConfig, url, formdata, specifiedChannelName } = context;
+    const db = getDatabase(env);
+
+    const cosSettings = uploadConfig.tencentcos;
+    if (!cosSettings || !cosSettings.channels || cosSettings.channels.length === 0) {
+        return createResponse('Error: No Tencent COS channel configured', { status: 400 });
+    }
+
+    const cosChannels = cosSettings.channels;
+    let cosChannel;
+    if (specifiedChannelName) {
+        cosChannel = cosChannels.find(ch => ch.name === specifiedChannelName);
+    }
+    if (!cosChannel) {
+        cosChannel = cosSettings.loadBalance?.enabled
+            ? cosChannels[Math.floor(Math.random() * cosChannels.length)]
+            : cosChannels[0];
+    }
+
+    const secretId = cosChannel?.secretId || cosChannel?.accessKeyId;
+    const secretKey = cosChannel?.secretKey || cosChannel?.secretAccessKey;
+    const region = cosChannel?.region;
+    const appId = cosChannel?.appId || '';
+    const bucketName = cosChannel?.bucketName || buildTencentCOSBucketName(cosChannel?.bucket, appId);
+    const endpoint = cosChannel?.endpoint || buildTencentCOSEndpoint(region);
+    const publicUrl = normalizeTencentCOSPublicBase(cosChannel?.publicUrl || cosChannel?.cdnDomain);
+
+    if (!cosChannel || !secretId || !secretKey || !region || !bucketName || !endpoint) {
+        return createResponse('Error: Tencent COS channel not properly configured', { status: 400 });
+    }
+
+    const file = formdata.get('file');
+    if (!file) return createResponse('Error: No file provided', { status: 400 });
+
+    const arrayBuffer = await file.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    const cosFileName = fullId;
+
+    const cosClient = new S3Client({
+        region,
+        endpoint,
+        credentials: {
+            accessKeyId: secretId,
+            secretAccessKey: secretKey
+        },
+        forcePathStyle: false
+    });
+
+    try {
+        await cosClient.send(new PutObjectCommand({
+            Bucket: bucketName,
+            Key: cosFileName,
+            Body: uint8Array,
+            ContentType: file.type
+        }));
+
+        metadata.Channel = "TencentCOS";
+        metadata.ChannelName = cosChannel.name;
+        metadata.TencentCOSAppId = appId;
+        metadata.TencentCOSRegion = region;
+        metadata.TencentCOSBucket = bucketName;
+        metadata.TencentCOSFileKey = cosFileName;
+        metadata.TencentCOSEndpoint = endpoint;
+        metadata.TencentCOSSecretId = secretId;
+        metadata.TencentCOSSecretKey = secretKey;
+
+        const endpointDomain = endpoint.replace(/https?:\/\//, "");
+        metadata.TencentCOSLocation = `https://${bucketName}.${endpointDomain}/${cosFileName}`;
+        if (publicUrl) {
+            metadata.TencentCOSPublicUrl = `${publicUrl}/${cosFileName}`;
+            metadata.TencentCOSCdnFileUrl = metadata.TencentCOSPublicUrl;
+        }
+
+        const uploadModerate = securityConfig.upload?.moderate;
+        if (uploadModerate && uploadModerate.enabled) {
+            if (metadata.TencentCOSPublicUrl) {
+                metadata.Label = await moderateContent(env, metadata.TencentCOSPublicUrl);
+            } else {
+                try {
+                    await db.put(fullId, "", { metadata });
+                } catch {
+                    return createResponse("Error: Failed to write to database", { status: 500 });
+                }
+                const moderateUrl = `https://${url.hostname}/file/${fullId}`;
+                await purgeCDNCache(env, moderateUrl, url);
+                metadata.Label = await moderateContent(env, moderateUrl);
+            }
+        }
+
+        try {
+            await db.put(fullId, "", { metadata });
+        } catch {
+            return createResponse("Error: Failed to write to database", { status: 500 });
+        }
+
+        waitUntil(endUpload(context, fullId, metadata));
+
+        return createResponse(JSON.stringify([{ src: returnLink }]), {
+            status: 200,
+            headers: {
+                "Content-Type": "application/json",
+            },
+        });
+    } catch (error) {
+        return createResponse(`Error: Failed to upload to Tencent COS - ${error.message}`, { status: 500 });
+    }
+}
 
 // 上传到Telegram
 async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName, fileType, returnLink) {

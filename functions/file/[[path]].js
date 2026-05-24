@@ -81,6 +81,11 @@ export async function onRequest(context) {  // Contents of context object
         return await handleS3File(context, imgRecord.metadata, encodedFileName, fileType);
     }
 
+    /* Tencent COS渠道 */
+    if (imgRecord.metadata?.Channel === "TencentCOS") {
+        return await handleTencentCOSFile(context, imgRecord.metadata, encodedFileName, fileType);
+    }
+
     /* Discord 渠道 */
     if (imgRecord.metadata?.Channel === 'Discord') {
         // 检查是否为分片文件
@@ -796,6 +801,22 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
     }
 }
 
+
+
+// 处理 Tencent COS 文件读取
+async function handleTencentCOSFile(context, metadata, encodedFileName, fileType) {
+    const mappedMetadata = {
+        S3CdnFileUrl: metadata?.TencentCOSCdnFileUrl || metadata?.TencentCOSPublicUrl,
+        S3Region: metadata?.TencentCOSRegion,
+        S3Endpoint: metadata?.TencentCOSEndpoint,
+        S3AccessKeyId: metadata?.TencentCOSSecretId,
+        S3SecretAccessKey: metadata?.TencentCOSSecretKey,
+        S3PathStyle: false,
+        S3BucketName: metadata?.TencentCOSBucket,
+        S3FileKey: metadata?.TencentCOSFileKey,
+    };
+    return await handleS3File(context, mappedMetadata, encodedFileName, fileType);
+}
 
 // 处理 Discord 文件读取
 async function handleDiscordFile(context, metadata, encodedFileName, fileType) {

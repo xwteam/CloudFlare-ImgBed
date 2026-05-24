@@ -61,6 +61,8 @@ export async function fetchUploadConfig(env, context = null) {
         settings.telegram.channels = settings.telegram.channels.filter((channel) => channel.enabled);
         settings.cfr2.channels = settings.cfr2.channels.filter((channel) => channel.enabled);
         settings.s3.channels = settings.s3.channels.filter((channel) => channel.enabled);
+        settings.tencentcos = settings.tencentcos || { channels: [], loadBalance: { enabled: false, channels: [] } };
+        settings.tencentcos.channels = settings.tencentcos.channels.filter((channel) => channel.enabled);
         settings.discord.channels = settings.discord.channels.filter((channel) => channel.enabled);
         settings.huggingface.channels = settings.huggingface.channels.filter((channel) => channel.enabled);
         settings.webdav.channels = settings.webdav.channels.filter((channel) => channel.enabled);
@@ -70,6 +72,7 @@ export async function fetchUploadConfig(env, context = null) {
         if (context) {
             settings.cfr2.channels = await filterChannelsByQuota(context, settings.cfr2.channels);
             settings.s3.channels = await filterChannelsByQuota(context, settings.s3.channels);
+            settings.tencentcos.channels = await filterChannelsByQuota(context, settings.tencentcos.channels);
             settings.webdav.channels = await filterChannelsByQuota(context, settings.webdav.channels);
         }
 
@@ -81,6 +84,7 @@ export async function fetchUploadConfig(env, context = null) {
             telegram: { channels: [] },
             cfr2: { channels: [] },
             s3: { channels: [] },
+            tencentcos: { channels: [] },
             discord: { channels: [] },
             huggingface: { channels: [] },
             webdav: { channels: [] }

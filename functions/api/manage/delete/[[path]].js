@@ -148,6 +148,11 @@ async function deleteFile(env, fileId, cdnUrl, url) {
             await deleteS3File(img);
         }
 
+        // Tencent COS 渠道的图片，需要删除 COS 中对应的对象
+        if (img.metadata?.Channel === 'TencentCOS') {
+            await deleteTencentCOSFile(img);
+        }
+
         // Discord 渠道的图片，需要删除 Discord 中对应的消息
         if (img.metadata?.Channel === 'Discord') {
             await deleteDiscordFile(img);
@@ -205,6 +210,39 @@ async function deleteS3File(img) {
         return true;
     } catch (error) {
         console.error("S3 Delete Failed:", error);
+        return false;
+    }
+}
+
+
+// 删除 Tencent COS 渠道的图片
+async function deleteTencentCOSFile(img) {
+    const cosClient = new S3Client({
+        region: img.metadata?.TencentCOSRegion,
+        endpoint: img.metadata?.TencentCOSEndpoint,
+        credentials: {
+            accessKeyId: img.metadata?.TencentCOSSecretId,
+            secretAccessKey: img.metadata?.TencentCOSSecretKey
+        },
+        forcePathStyle: false
+    });
+
+    const bucketName = img.metadata?.TencentCOSBucket;
+    const key = img.metadata?.TencentCOSFileKey;
+
+    if (!bucketName || !key) {
+        console.warn('Tencent COS file missing required metadata for deletion');
+        return false;
+    }
+
+    try {
+        await cosClient.send(new DeleteObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+        }));
+        return true;
+    } catch (error) {
+        console.error("Tencent COS Delete Failed:", error);
         return false;
     }
 }
